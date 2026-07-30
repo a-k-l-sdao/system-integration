@@ -1,3 +1,4 @@
+import re
 import time
 
 import pytest
@@ -25,15 +26,34 @@ def test_expired_deploy_rejected_at_admission(provider, timeouts) -> None:
     handle = provider.create_standalone(config)
     node = Node(handle=handle, role=NodeRole.STANDALONE)
     try:
-        height = max(block.blockNumber for block in node.get_blocks(5))
         timestamp = int(time.time() * 1000)
+        probe = create_deploy_data(
+            BOOTSTRAP_ID.private_key(),
+            '@"expired-admission-probe"!(1)',
+            1,
+            100_000,
+            -10_000,
+            timestamp,
+            "root",
+        )
+
+        with pytest.raises(F1r3flyClientException, match="expired") as rejected:
+            node.send_deploy(probe)
+        boundary = re.search(
+            r"at block (-?\d+) with deploy lifespan (\d+)",
+            str(rejected.value),
+        )
+        assert boundary is not None
+        height, lifespan = map(int, boundary.groups())
+        assert lifespan == _DEPLOY_LIFESPAN
+
         expired = create_deploy_data(
             BOOTSTRAP_ID.private_key(),
             '@"expired-admission"!(1)',
             1,
             100_000,
-            height - _DEPLOY_LIFESPAN,
-            timestamp,
+            height - lifespan,
+            timestamp + 1,
             "root",
         )
         inside = create_deploy_data(
@@ -41,8 +61,8 @@ def test_expired_deploy_rejected_at_admission(provider, timeouts) -> None:
             '@"inside-admission-window"!(1)',
             1,
             100_000,
-            height - _DEPLOY_LIFESPAN + 1,
-            timestamp + 1,
+            height - lifespan + 1,
+            timestamp + 2,
             "root",
         )
 

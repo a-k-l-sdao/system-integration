@@ -37,6 +37,7 @@ Each test builds its own `ShardConfig` and calls `provider.create_shard(...)`. U
 
 | Tests | File | Summary |
 |---|---|---|
+| 1 | [test_observer_missing_block_retry](test_observer_missing_block_retry.md) | Observer retains failed initial block requests and catches up after source recovery |
 | 4 | [test_asymmetric_bonds](test_asymmetric_bonds.md) | Consensus with unequal stake weights (60/20/15) |
 | 5 | [test_consensus_safety](test_consensus_safety.md) | Consensus safety under validator failure, FTT boundaries, epochs |
 | 3 | [test_user_contract_concurrency](test_user_contract_concurrency.md) | Multi-parent merge on user-contract state (no PoS): independent channels, single-Map RMW (the bonds shape), mergeable counter — under always-on background load |
@@ -72,6 +73,6 @@ Each test spins up a single node with no peers. Used for heartbeat timing, stand
 | Directory | Files | Tests |
 |---|---|---|
 | `tests/shared/` | 14 | 69 |
-| `tests/custom/` | 11 | 25 |
+| `tests/custom/` | 12 | 26 |
 | `tests/standalone/` | 3 | 14 |
-| **Total** | **28** | **108** |
+| **Total** | **29** | **109** |

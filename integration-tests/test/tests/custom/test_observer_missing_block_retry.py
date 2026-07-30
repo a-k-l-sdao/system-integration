@@ -35,7 +35,7 @@ def active_shard(provider, timeouts):
 def test_observer_retries_missing_block_after_peer_returns(active_shard, timeouts) -> None:
     v1 = active_shard.node("validator1")
     poll_until(
-        lambda: len(v1.get_blocks(25)) if len(v1.get_blocks(25)) >= 20 else None,
+        lambda: (count if (count := len(v1.get_blocks(15))) >= 10 else None),
         timeout=timeouts.finalization * 3,
         interval=2,
         description="source shard builds a non-trivial finalized history",

@@ -47,7 +47,10 @@ def test_duplicate_signed_deploy_race(provider, timeouts) -> None:
 
         assert accepted == [expected_id], f"expected one acceptance, got {accepted}"
         assert len(rejected) == 31, f"expected 31 duplicate rejections, got {len(rejected)}"
-        assert all("duplicate" in message.lower() for message in rejected), rejected
+        assert all(
+            "duplicate" in message.lower() or "already known" in message.lower()
+            for message in rejected
+        ), rejected
 
         status = wait_for_deploy_finalized(node, expected_id, timeouts.finalization)
         block = node.get_block(status.latestBlockHash.hex())

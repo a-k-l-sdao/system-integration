@@ -25,7 +25,7 @@ def test_expired_deploy_rejected_at_admission(provider, timeouts) -> None:
     handle = provider.create_standalone(config)
     node = Node(handle=handle, role=NodeRole.STANDALONE)
     try:
-        height = node.last_finalized_block().blockInfo.blockNumber
+        height = node.get_current_block_number()
         timestamp = int(time.time() * 1000)
         expired = create_deploy_data(
             BOOTSTRAP_ID.private_key(),

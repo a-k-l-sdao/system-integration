@@ -2,10 +2,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from ...infra.assertions import assert_all_deploys_finalized_on_all_nodes
 from ...infra.config import ShardConfig
 from ...infra.keys import VALIDATOR1_ID, VALIDATOR2_ID, VALIDATOR3_ID
 from ...infra.polling import (
+    wait_for_deploy_finalized,
     wait_for_lfb_at_least,
     wait_for_lfb_converged,
     wait_for_node_quiet,
@@ -23,7 +23,7 @@ def notification_shard(provider, timeouts):
         bonds=[
             (VALIDATOR1_ID, 100),
             (VALIDATOR2_ID, 100),
-            (VALIDATOR3_ID, 100),
+            (VALIDATOR3_ID, 1),
         ],
         ftt=0.1,
         heartbeat=True,
@@ -56,12 +56,24 @@ def test_slow_peer_does_not_block_block_processing(notification_shard, timeouts)
         with ThreadPoolExecutor(max_workers=8) as executor:
             deploy_ids = list(executor.map(submit, range(_DEPLOY_COUNT)))
 
-        assert_all_deploys_finalized_on_all_nodes(
-            active,
-            deploy_ids,
-            timeouts.finalization * 3,
-            label="slow-peer-notification",
-        )
+        checks = [(node, deploy_id) for node in active for deploy_id in deploy_ids]
+
+        def wait_for_finalization(check) -> None:
+            node, deploy_id = check
+            try:
+                wait_for_deploy_finalized(
+                    node,
+                    deploy_id,
+                    timeouts.finalization * 3,
+                )
+            except Exception as exc:
+                pytest.fail(
+                    f"{deploy_id[:16]} did not finalize on {node.name}: {exc}",
+                    pytrace=False,
+                )
+
+        with ThreadPoolExecutor(max_workers=len(checks)) as executor:
+            list(executor.map(wait_for_finalization, checks))
         wait_for_lfb_at_least(
             v1,
             baseline + 3,

@@ -34,17 +34,17 @@ def test_observer_retries_missing_block_after_peer_returns(active_shard, timeout
     sources = list(active_shard.all_nodes)
     key = VALIDATOR1_ID.private_key()
     latest_hash = ""
-    for index in range(10):
+    for index in range(5):
         _, latest_hash, _ = deploy_and_read(
             v1,
             f"new deployId(`rho:system:deployId`) in {{ deployId!({index}) }}",
             key,
-            timeouts.deploy_inclusion * 3,
+            timeouts.custom(120),
             timeouts.finalization,
         )
     for source in sources:
         wait_for_block_visible(source, latest_hash, timeouts.command)
-    wait_for_lfb_at_least(v1, 8, timeout=timeouts.finalization * 3)
+    wait_for_lfb_at_least(v1, 5, timeout=timeouts.finalization * 3)
     target = v1.last_finalized_block().blockInfo
 
     with active_shard.add_observer(

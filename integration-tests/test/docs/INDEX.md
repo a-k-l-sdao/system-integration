@@ -60,6 +60,7 @@ Each test spins up a single node with no peers. Used for heartbeat timing, stand
 | Tests | File | Summary |
 |---|---|---|
 | 2 | [test_heartbeat](test_heartbeat.md) | Standalone heartbeat config: idle block creation, disabled when max-parents=1 |
+| 1 | [test_expired_deploy_admission](test_expired_deploy_admission.md) | Exact VABN expiration boundary, immediate rejection, and no recovery churn |
 | 1 | [test_propose](test_propose.md) | Deploy phlo price validation with custom `--min-phlo-price` |
 | 7 | [test_token_metadata](test_token_metadata.md) | Native token metadata standalone: joiner mismatch, round-trip, restart drift, multi-shard, genesis blocking (validation rejections moved to Rust unit tests) |
 
@@ -73,5 +74,5 @@ Each test spins up a single node with no peers. Used for heartbeat timing, stand
 |---|---|---|
 | `tests/shared/` | 14 | 69 |
 | `tests/custom/` | 11 | 25 |
-| `tests/standalone/` | 3 | 14 |
-| **Total** | **28** | **108** |
+| `tests/standalone/` | 4 | 15 |
+| **Total** | **29** | **109** |

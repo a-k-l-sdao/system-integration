@@ -3,6 +3,7 @@ import pytest
 from ...infra.config import ShardConfig
 from ...infra.keys import VALIDATOR1_ID, VALIDATOR2_ID, VALIDATOR3_ID
 from ...infra.polling import (
+    deploy_and_read,
     poll_until,
     wait_for_block_visible,
     wait_for_lfb_at_least,
@@ -21,7 +22,7 @@ def active_shard(provider, timeouts):
             (VALIDATOR2_ID, 100),
             (VALIDATOR3_ID, 100),
         ],
-        heartbeat=False,
+        heartbeat=True,
     )
     shard = Shard.create(provider, config, timeouts)
     yield shard
@@ -31,26 +32,15 @@ def active_shard(provider, timeouts):
 def test_observer_retries_missing_block_after_peer_returns(active_shard, timeouts) -> None:
     v1 = active_shard.node("validator1")
     sources = list(active_shard.all_nodes)
-    validators = active_shard.validators
-    keys = [
-        VALIDATOR1_ID.private_key(),
-        VALIDATOR2_ID.private_key(),
-        VALIDATOR3_ID.private_key(),
-    ]
+    key = VALIDATOR1_ID.private_key()
     latest_hash = ""
-    for index in range(12):
-        validator = validators[index % len(validators)]
-        if latest_hash:
-            wait_for_block_visible(validator, latest_hash, timeouts.command)
-        validator.deploy_string(
-            f'@"observer-history-{index}"!({index})',
-            keys[index % len(keys)],
-        )
-        latest_hash = poll_until(
-            validator.propose,
-            timeout=timeouts.deploy_inclusion,
-            interval=0.25,
-            description=f"history deploy {index} reaches proposer buffer",
+    for index in range(10):
+        _, latest_hash, _ = deploy_and_read(
+            v1,
+            f"new deployId(`rho:system:deployId`) in {{ deployId!({index}) }}",
+            key,
+            timeouts.deploy_inclusion * 3,
+            timeouts.finalization,
         )
     for source in sources:
         wait_for_block_visible(source, latest_hash, timeouts.command)

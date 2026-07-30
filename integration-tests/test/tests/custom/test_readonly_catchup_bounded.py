@@ -1,8 +1,10 @@
+import os
 import threading
 import time
 
 import pytest
 import requests
+from f1r3fly.client import F1r3flyClientException
 
 from ...infra.config import ShardConfig
 from ...infra.keys import VALIDATOR1_ID, VALIDATOR2_ID, VALIDATOR3_ID
@@ -16,23 +18,62 @@ from ...infra.shard import Shard
 
 pytestmark = pytest.mark.xdist_group("custom")
 
-_MIN_DAG_DEPTH = 40
+DEFAULT_HISTORY_BLOCKS = 40
 _OBSERVER_MEMORY_CEILING_MB = 1500
+
+
+def _history_block_count() -> int:
+    raw = os.environ.get(
+        "F1R3FLY_READONLY_HISTORY_BLOCKS",
+        str(DEFAULT_HISTORY_BLOCKS),
+    )
+    try:
+        count = int(raw)
+    except ValueError as exc:
+        raise ValueError("F1R3FLY_READONLY_HISTORY_BLOCKS must be positive") from exc
+    if count <= 0:
+        raise ValueError("F1R3FLY_READONLY_HISTORY_BLOCKS must be positive")
+    return count
+
+
+def _propose_until_included(node, deploy_id: str, timeout: int) -> str:
+    def attempt():
+        try:
+            return node.find_deploy(deploy_id).blockHash
+        except F1r3flyClientException:
+            pass
+
+        try:
+            node.propose()
+        except F1r3flyClientException as exc:
+            if "No new deploys" not in str(exc) and "another propose is in progress" not in str(
+                exc
+            ):
+                raise
+
+        try:
+            return node.find_deploy(deploy_id).blockHash
+        except F1r3flyClientException:
+            return None
+
+    return poll_until(
+        attempt,
+        timeout=timeout,
+        interval=0.5,
+        description=f"deploy {deploy_id[:24]} becomes available and is proposed",
+    )
 
 
 @pytest.fixture(scope="module")
 def deep_shard(provider, timeouts):
     config = ShardConfig(
         bonds=[
-            (VALIDATOR1_ID, 100),
-            (VALIDATOR2_ID, 100),
-            (VALIDATOR3_ID, 100),
+            (VALIDATOR1_ID, 10_000_000),
+            (VALIDATOR2_ID, 1),
+            (VALIDATOR3_ID, 1),
         ],
-        heartbeat=True,
-        global_cli_options={
-            "--heartbeat-check-interval": "1second",
-            "--heartbeat-max-lfb-age": "1second",
-        },
+        ftt=-1,
+        heartbeat=False,
     )
     shard = Shard.create(provider, config, timeouts)
     yield shard
@@ -41,13 +82,31 @@ def deep_shard(provider, timeouts):
 
 def test_readonly_catchup_parallelism_keeps_api_responsive(deep_shard, timeouts) -> None:
     source = deep_shard.node("validator1")
-    poll_until(
-        lambda: (
-            blocks if len(blocks := source.get_blocks(_MIN_DAG_DEPTH)) >= _MIN_DAG_DEPTH else None
-        ),
-        timeout=timeouts.finalization * 4,
-        interval=2,
-        description=f"source DAG reaches {_MIN_DAG_DEPTH} blocks",
+    history_blocks = _history_block_count()
+    baseline = source.last_finalized_block().blockInfo.blockNumber
+    history = []
+    for index in range(history_blocks):
+        valid_after = max(
+            0,
+            source.last_finalized_block().blockInfo.blockNumber - 1,
+        )
+        deploy_id = source.deploy_string(
+            f"new ch in {{ ch!({index}) | for (_ <- ch) {{ Nil }} }}",
+            VALIDATOR1_ID.private_key(),
+            valid_after_block_no=valid_after,
+        )
+        history.append(
+            _propose_until_included(
+                source,
+                deploy_id,
+                timeout=timeouts.custom(120),
+            )
+        )
+    assert len(set(history)) == history_blocks
+    wait_for_lfb_at_least(
+        source,
+        baseline + history_blocks,
+        timeout=timeouts.finalization * 2,
     )
     target = source.last_finalized_block().blockInfo
 

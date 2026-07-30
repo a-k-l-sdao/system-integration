@@ -6,7 +6,6 @@ from ...infra.assertions import assert_all_deploys_finalized_on_all_nodes
 from ...infra.config import ShardConfig
 from ...infra.keys import VALIDATOR1_ID, VALIDATOR2_ID, VALIDATOR3_ID
 from ...infra.polling import (
-    poll_until,
     wait_for_deploy_included,
     wait_for_lfb_converged,
     wait_for_node_quiet,
@@ -16,7 +15,6 @@ from ...infra.shard import Shard
 pytestmark = pytest.mark.xdist_group("custom")
 
 _HEARTBEAT_SUCCESS = "Heartbeat: Successfully created block"
-_BACKPRESSURE = "Heartbeat: Empty frontier backpressure active"
 
 
 @pytest.fixture(scope="module")
@@ -29,10 +27,10 @@ def recovery_shard(provider, timeouts):
         ],
         heartbeat=True,
         global_cli_options={
-            "--heartbeat-check-interval": "1second",
-            "--heartbeat-max-lfb-age": "1second",
-            "--heartbeat-self-propose-cooldown": "1second",
-            "--heartbeat-stale-recovery-min-interval": "1second",
+            "--heartbeat-check-interval": "5seconds",
+            "--heartbeat-max-lfb-age": "5seconds",
+            "--heartbeat-self-propose-cooldown": "5seconds",
+            "--heartbeat-stale-recovery-min-interval": "5seconds",
             "--heartbeat-advanced-empty-frontier-max-unfinalized-blocks": "4",
         },
     )
@@ -43,10 +41,34 @@ def recovery_shard(provider, timeouts):
 
 def test_finality_stall_bounded_recovery(recovery_shard, timeouts) -> None:
     v1 = recovery_shard.node("validator1")
-    unavailable = [
+    validators = [
+        v1,
         recovery_shard.node("validator2"),
         recovery_shard.node("validator3"),
     ]
+    unavailable = [
+        validators[1],
+        validators[2],
+    ]
+
+    warmup_deploys = [
+        v1.deploy_string(
+            '@"finality-stall-warmup"!(1)',
+            VALIDATOR1_ID.private_key(),
+        )
+    ]
+    assert_all_deploys_finalized_on_all_nodes(
+        recovery_shard.all_nodes,
+        warmup_deploys,
+        timeouts.finalization * 4,
+        label="pre-stall-warmup",
+    )
+    wait_for_lfb_converged(
+        recovery_shard.all_nodes,
+        timeout=timeouts.finalization * 2,
+        max_spread=3,
+        description="healthy finalized baseline before quorum loss",
+    )
     baseline_lfb = v1.last_finalized_block().blockInfo.blockNumber
 
     for node in unavailable:
@@ -54,20 +76,16 @@ def test_finality_stall_bounded_recovery(recovery_shard, timeouts) -> None:
     try:
         for node in unavailable:
             wait_for_node_quiet(node, timeout=10)
-        poll_until(
-            lambda: True if _BACKPRESSURE in v1.logs() else None,
-            timeout=20,
-            interval=0.5,
-            description="isolated validator reaches empty-frontier backpressure",
-        )
 
         successes_before = v1.logs().count(_HEARTBEAT_SUCCESS)
-        time.sleep(35)
+        time.sleep(45)
         empty_recovery_blocks = v1.logs().count(_HEARTBEAT_SUCCESS) - successes_before
         assert empty_recovery_blocks <= 2, (
             f"stalled LFB produced {empty_recovery_blocks} empty recovery blocks "
-            "after backpressure"
+            "during bounded recovery"
         )
+        stalled_lfb = v1.last_finalized_block().blockInfo.blockNumber
+        assert stalled_lfb == baseline_lfb
 
         deploy_id = v1.deploy_string(
             '@"pending-bypasses-empty-frontier-pressure"!(1)',

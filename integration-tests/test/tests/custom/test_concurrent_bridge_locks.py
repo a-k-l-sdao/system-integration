@@ -75,7 +75,7 @@ def test_concurrent_bridge_locks_exact_accounting(bridge_shard, timeouts) -> Non
         v1,
         "",
         key,
-        timeouts.deploy_inclusion * 3,
+        timeouts.custom(120),
         timeouts.finalization,
         rho_file="resources/bridge-v2.rho",
         phlo_limit=_PHLO_LIMIT,

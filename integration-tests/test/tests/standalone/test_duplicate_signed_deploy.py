@@ -54,9 +54,7 @@ def test_duplicate_signed_deploy_race(provider, timeouts) -> None:
 
         status = wait_for_deploy_finalized(node, expected_id, timeouts.finalization)
         block = node.get_block(status.latestBlockHash.hex())
-        occurrences = sum(
-            1 for processed in block.deploys if processed.deploy.sig.hex() == expected_id
-        )
+        occurrences = sum(1 for processed in block.deploys if processed.sig == expected_id)
         assert occurrences == 1, f"deploy executed {occurrences} times in canonical block"
     finally:
         node.close()

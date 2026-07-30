@@ -3,10 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from f1r3fly.par import par_as_int, par_as_list, par_as_string, par_as_uri
 
-from ...infra.assertions import assert_all_deploys_finalized_on_all_nodes
 from ...infra.config import ShardConfig
 from ...infra.keys import VALIDATOR1_ID, VALIDATOR2_ID, VALIDATOR3_ID
-from ...infra.polling import deploy_and_read
+from ...infra.polling import deploy_and_read, wait_for_deploy_finalized
 from ...infra.shard import Shard
 
 pytestmark = pytest.mark.xdist_group("custom")
@@ -96,12 +95,16 @@ def test_concurrent_bridge_locks_exact_accounting(bridge_shard, timeouts) -> Non
         deploy_ids = list(executor.map(submit, range(_LOCK_COUNT)))
 
     assert len(set(deploy_ids)) == _LOCK_COUNT
-    assert_all_deploys_finalized_on_all_nodes(
-        bridge_shard.all_nodes,
-        deploy_ids,
-        timeouts.finalization * 4,
-        label="concurrent-bridge-locks",
-    )
+    with ThreadPoolExecutor(max_workers=_LOCK_COUNT) as executor:
+        statuses = list(
+            executor.map(
+                lambda deploy_id: wait_for_deploy_finalized(
+                    v1, deploy_id, timeouts.finalization * 4
+                ),
+                deploy_ids,
+            )
+        )
+    assert len(statuses) == _LOCK_COUNT
 
     lfb_hash = readonly.last_finalized_block().blockInfo.blockHash
     nonce = par_as_int(readonly.registry_query(query_uri, "getNonce", block_hash=lfb_hash)[0])

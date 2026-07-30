@@ -46,7 +46,12 @@ def test_observer_retries_missing_block_after_peer_returns(active_shard, timeout
             f'@"observer-history-{index}"!({index})',
             keys[index % len(keys)],
         )
-        latest_hash = validator.propose()
+        latest_hash = poll_until(
+            validator.propose,
+            timeout=timeouts.deploy_inclusion,
+            interval=0.25,
+            description=f"history deploy {index} reaches proposer buffer",
+        )
     for source in sources:
         wait_for_block_visible(source, latest_hash, timeouts.command)
     wait_for_lfb_at_least(v1, 8, timeout=timeouts.finalization * 3)

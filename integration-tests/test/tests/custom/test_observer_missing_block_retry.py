@@ -21,11 +21,7 @@ def active_shard(provider, timeouts):
             (VALIDATOR2_ID, 100),
             (VALIDATOR3_ID, 100),
         ],
-        heartbeat=True,
-        global_cli_options={
-            "--heartbeat-check-interval": "1second",
-            "--heartbeat-max-lfb-age": "1second",
-        },
+        heartbeat=False,
     )
     shard = Shard.create(provider, config, timeouts)
     yield shard
@@ -34,14 +30,27 @@ def active_shard(provider, timeouts):
 
 def test_observer_retries_missing_block_after_peer_returns(active_shard, timeouts) -> None:
     v1 = active_shard.node("validator1")
-    poll_until(
-        lambda: (count if (count := len(v1.get_blocks(15))) >= 10 else None),
-        timeout=timeouts.finalization * 3,
-        interval=2,
-        description="source shard builds a non-trivial finalized history",
-    )
-    target = v1.last_finalized_block().blockInfo
     sources = list(active_shard.all_nodes)
+    validators = active_shard.validators
+    keys = [
+        VALIDATOR1_ID.private_key(),
+        VALIDATOR2_ID.private_key(),
+        VALIDATOR3_ID.private_key(),
+    ]
+    latest_hash = ""
+    for index in range(12):
+        validator = validators[index % len(validators)]
+        if latest_hash:
+            wait_for_block_visible(validator, latest_hash, timeouts.command)
+        validator.deploy_string(
+            f'@"observer-history-{index}"!({index})',
+            keys[index % len(keys)],
+        )
+        latest_hash = validator.propose()
+    for source in sources:
+        wait_for_block_visible(source, latest_hash, timeouts.command)
+    wait_for_lfb_at_least(v1, 8, timeout=timeouts.finalization * 3)
+    target = v1.last_finalized_block().blockInfo
 
     with active_shard.add_observer(
         cli_options={"--network-timeout": "2seconds"},

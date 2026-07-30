@@ -7,7 +7,7 @@ Verifies exact deploy-lifespan boundary enforcement at admission and continued n
 - `test_expired_deploy_rejected_at_admission` — rejects a deploy at the expired boundary, accepts one block inside the window, and verifies the rejected deploy never enters the DAG.
 
 ## Setup
-A fast-heartbeat standalone node advanced through the 50-block deploy lifespan.
+A fast-heartbeat standalone node signs deploys directly at the current LFB-relative expiration boundary.
 
 ## Key assertions
 - A deploy whose VABN is exactly `current LFB - lifespan` is rejected immediately.
@@ -15,4 +15,4 @@ A fast-heartbeat standalone node advanced through the 50-block deploy lifespan.
 - The rejected deploy is not recoverable through deploy lookup and the node continues finalizing.
 
 ## Infrastructure used
-`Node.send_deploy`, `Node.find_deploy`, `provider.create_standalone`, `wait_for_deploy_finalized`, and `wait_for_lfb_at_least`.
+`Node.send_deploy`, `Node.find_deploy`, `provider.create_standalone`, and `wait_for_deploy_finalized`.

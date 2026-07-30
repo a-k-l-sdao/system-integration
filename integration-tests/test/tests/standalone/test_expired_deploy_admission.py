@@ -7,7 +7,7 @@ from f1r3fly.util import create_deploy_data
 from ...infra.config import NodeConfig
 from ...infra.keys import BOOTSTRAP_ID
 from ...infra.node import Node
-from ...infra.polling import wait_for_deploy_finalized, wait_for_lfb_at_least
+from ...infra.polling import wait_for_deploy_finalized
 from ...infra.types import NodeRole
 
 _DEPLOY_LIFESPAN = 50
@@ -25,18 +25,7 @@ def test_expired_deploy_rejected_at_admission(provider, timeouts) -> None:
     handle = provider.create_standalone(config)
     node = Node(handle=handle, role=NodeRole.STANDALONE)
     try:
-        initial_height = wait_for_lfb_at_least(
-            node,
-            _DEPLOY_LIFESPAN,
-            timeout=timeouts.finalization * 3,
-            interval=1,
-        )
-        height = wait_for_lfb_at_least(
-            node,
-            initial_height + 1,
-            timeout=timeouts.finalization,
-            interval=0.05,
-        )
+        height = node.last_finalized_block().blockInfo.blockNumber
         timestamp = int(time.time() * 1000)
         expired = create_deploy_data(
             BOOTSTRAP_ID.private_key(),
@@ -62,13 +51,6 @@ def test_expired_deploy_rejected_at_admission(provider, timeouts) -> None:
 
         accepted_id = node.send_deploy(inside)
         wait_for_deploy_finalized(node, accepted_id, timeouts.finalization)
-        settled_height = node.get_current_block_number()
-        wait_for_lfb_at_least(
-            node,
-            settled_height + 5,
-            timeout=timeouts.finalization,
-            interval=1,
-        )
 
         with pytest.raises(F1r3flyClientException):
             node.find_deploy(expired.sig.hex())

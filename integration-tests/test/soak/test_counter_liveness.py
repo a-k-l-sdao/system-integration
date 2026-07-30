@@ -1,4 +1,4 @@
-"""Sequential counter state and node-liveness soak test."""
+"""Batched counter state and node-liveness soak test."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 import os
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
 
 import pytest
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.xdist_group("soak")
 
 COUNTER_CONTRACT = "resources/counter/counter.rho"
 DEFAULT_ITERATIONS = 1_000
+DEFAULT_BATCH_SIZE = 8
 CHECKPOINT_INTERVAL = 100
 INCLUSION_TIMEOUT_SECONDS = 120
 FINALIZATION_TIMEOUT_SECONDS = 600
@@ -38,6 +40,17 @@ def _iteration_count() -> int:
         raise ValueError("F1R3FLY_COUNTER_ITERATIONS must be a positive integer") from exc
     if count <= 0:
         raise ValueError("F1R3FLY_COUNTER_ITERATIONS must be a positive integer")
+    return count
+
+
+def _batch_size() -> int:
+    raw = os.environ.get("F1R3FLY_COUNTER_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
+    try:
+        count = int(raw)
+    except ValueError as exc:
+        raise ValueError("F1R3FLY_COUNTER_BATCH_SIZE must be a positive integer") from exc
+    if count <= 0:
+        raise ValueError("F1R3FLY_COUNTER_BATCH_SIZE must be a positive integer")
     return count
 
 
@@ -77,6 +90,28 @@ def _wait_finalized_on_every_node(
     return statuses
 
 
+def _wait_batch_finalized_on_every_node(
+    nodes,
+    deploy_ids: list[str],
+    timeout: int,
+    label: str,
+) -> None:
+    tasks = [(node, deploy_id) for deploy_id in deploy_ids for node in nodes]
+
+    def wait_one(task) -> None:
+        node, deploy_id = task
+        try:
+            wait_for_deploy_finalized(node, deploy_id, timeout)
+        except Exception as exc:
+            pytest.fail(
+                f"{label}: deploy {deploy_id[:24]} did not finalize on "
+                f"{node.name}: {type(exc).__name__}: {exc}"
+            )
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        list(executor.map(wait_one, tasks))
+
+
 def _canonical_hash(node, deploy_id: str, status, inclusion_timeout: int) -> str:
     if status.latestBlockHash:
         return status.latestBlockHash.hex()
@@ -111,8 +146,9 @@ def _checkpoint(nodes, completed: int, total: int) -> None:
 
 @pytest.mark.timeout(43_200)
 def test_counter_state_survives_1000_finalized_increments(provider, timeouts) -> None:
-    """Finalize and verify one counter increment at a time for 1,000 rounds."""
+    """Finalize and verify 1,000 counter increments in bounded batches."""
     iterations = _iteration_count()
+    batch_size = min(_batch_size(), iterations)
     config = ShardConfig(
         bonds=[
             (VALIDATOR1_ID, 100),
@@ -121,6 +157,12 @@ def test_counter_state_survives_1000_finalized_increments(provider, timeouts) ->
         ],
         heartbeat=True,
         include_readonly=True,
+        global_cli_options={
+            "--heartbeat-check-interval": "5seconds",
+            "--heartbeat-max-lfb-age": "5seconds",
+            "--heartbeat-self-propose-cooldown": "5seconds",
+            "--heartbeat-stale-recovery-min-interval": "5seconds",
+        },
         extra_wallets=[
             (
                 DEPLOYER_KEY.get_public_key().get_vault_address(),
@@ -170,59 +212,70 @@ def test_counter_state_survives_1000_finalized_increments(provider, timeouts) ->
         initial_value = _read_counter(readonly, counter_uri, setup_hash, "counter setup")
         assert initial_value == 0, f"counter setup value is {initial_value}, expected 0"
         logging.info(
-            "counter soak started: uri=%s iterations=%d nodes=%s",
+            "counter soak started: uri=%s iterations=%d batch_size=%d nodes=%s",
             counter_uri,
             iterations,
+            batch_size,
             [node.name for node in all_nodes],
         )
 
         increment_term = _increment_term(counter_uri)
         last_value = initial_value
-        for expected in range(1, iterations + 1):
+        completed = 0
+        while completed < iterations:
+            next_checkpoint = min(
+                ((completed // CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL,
+                iterations,
+            )
+            expected = min(completed + batch_size, next_checkpoint, iterations)
+            batch_count = expected - completed
             round_started = time.monotonic()
-            deploy_id = validator.deploy_string(
-                increment_term,
-                DEPLOYER_KEY,
-                phlo_limit=PHLO_LIMIT,
-                phlo_price=PHLO_PRICE,
-            )
-            included = wait_for_deploy_included(validator, deploy_id, inclusion_timeout)
-            statuses = _wait_finalized_on_every_node(
+            with ThreadPoolExecutor(max_workers=batch_count) as executor:
+                deploy_ids = list(
+                    executor.map(
+                        lambda _: validator.deploy_string(
+                            increment_term,
+                            DEPLOYER_KEY,
+                            phlo_limit=PHLO_LIMIT,
+                            phlo_price=PHLO_PRICE,
+                        ),
+                        range(batch_count),
+                    )
+                )
+            assert len(set(deploy_ids)) == batch_count
+            _wait_batch_finalized_on_every_node(
                 all_nodes,
-                deploy_id,
+                deploy_ids,
                 finalization_timeout,
-                f"counter round {expected}/{iterations}",
+                f"counter batch {completed + 1}-{expected}/{iterations}",
             )
-            canonical_hash = _canonical_hash(
-                readonly,
-                deploy_id,
-                statuses[readonly.name],
-                inclusion_timeout,
-            )
+            canonical_hash = readonly.last_finalized_block().blockInfo.blockHash
             observed = _read_counter(
                 readonly,
                 counter_uri,
                 canonical_hash,
-                f"counter round {expected}/{iterations}",
+                f"counter batch {completed + 1}-{expected}/{iterations}",
             )
             assert observed == expected, (
-                f"counter round {expected}/{iterations}: expected {expected}, "
+                f"counter batch {completed + 1}-{expected}/{iterations}: expected {expected}, "
                 f"observed {observed}; previous value was {last_value}; "
-                f"deploy={deploy_id}; inclusion_block={included.blockHash}; "
+                f"deploys={deploy_ids}; "
                 f"canonical_block={canonical_hash}"
             )
             last_value = observed
             latency = time.monotonic() - round_started
             latencies.append(latency)
             logging.info(
-                "counter round %d/%d passed: value=%d deploy=%s block=#%d latency=%.2fs",
+                "counter batch %d-%d/%d passed: value=%d deploys=%d block=#%d latency=%.2fs",
+                completed + 1,
                 expected,
                 iterations,
                 observed,
-                deploy_id[:24],
+                batch_count,
                 readonly.get_block(canonical_hash).blockInfo.blockNumber,
                 latency,
             )
+            completed = expected
             if expected % CHECKPOINT_INTERVAL == 0 or expected == iterations:
                 _checkpoint(all_nodes, expected, iterations)
 
@@ -230,9 +283,10 @@ def test_counter_state_survives_1000_finalized_increments(provider, timeouts) ->
         assert last_value == iterations
         _checkpoint(all_nodes, iterations, iterations)
         logging.info(
-            "counter soak passed: rounds=%d final=%d elapsed=%.2fs "
-            "latency_min=%.2fs latency_avg=%.2fs latency_max=%.2fs",
+            "counter soak passed: increments=%d batches=%d final=%d elapsed=%.2fs "
+            "batch_latency_min=%.2fs batch_latency_avg=%.2fs batch_latency_max=%.2fs",
             iterations,
+            len(latencies),
             last_value,
             elapsed,
             min(latencies),
